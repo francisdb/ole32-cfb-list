@@ -170,6 +170,45 @@
             ListVPXContents(filename_original);
             Console.WriteLine("================= Copy ========================");
             ListVPXContents(filename_copy);
+            Console.WriteLine("================= Original name ===============");
+            ReadTableInfoTableName(filename_original);
+            Console.WriteLine("================= Copy name ===================");
+            ReadTableInfoTableName(filename_copy);
+        }
+
+        // read root\TableInfo\TableName
+        private static void ReadTableInfoTableName(string filename)
+        {
+            IStorage storage = null;
+            if (StgOpenStorage(
+                filename,
+                null,
+                STGM.DIRECT | STGM.READ | STGM.SHARE_EXCLUSIVE,
+                IntPtr.Zero,
+                0,
+                out storage) != 0)
+            {
+                Console.WriteLine("Failed to open storage at " + filename);
+                return;
+            }
+
+            IStorage tableInfoStorage;
+            storage.OpenStorage("TableInfo", null, (uint)(STGM.READ | STGM.SHARE_EXCLUSIVE), IntPtr.Zero, 0, out tableInfoStorage);
+
+            IStream tableNameStream;
+            tableInfoStorage.OpenStream("TableName", IntPtr.Zero, (uint)(STGM.READ | STGM.SHARE_EXCLUSIVE), 0, out tableNameStream);
+
+            System.Runtime.InteropServices.ComTypes.STATSTG statstg;
+            tableNameStream.Stat(out statstg, (int)STATFLAG.STATFLAG_DEFAULT);
+            IntPtr pcbRead = IntPtr.Zero;
+            byte[] buffer = new byte[statstg.cbSize];
+            tableNameStream.Read(buffer, buffer.Length, pcbRead);
+            Marshal.ReleaseComObject(tableNameStream);
+            Marshal.ReleaseComObject(tableInfoStorage);
+            Marshal.ReleaseComObject(storage);
+
+            // the string is encoded with 2 bytes per character
+            Console.WriteLine(System.Text.Encoding.Unicode.GetString(buffer));
         }
 
         private static void ListVPXContents(string filename)
@@ -187,6 +226,7 @@
                     out storage) == 0)
                 {
                     EnumerateNodes(storage, "root");
+                    Marshal.ReleaseComObject(storage);
                 }
                 else
                 {
