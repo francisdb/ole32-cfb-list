@@ -158,6 +158,7 @@ public static class Ole32
     public static extern int StgIsStorageFile(
         [MarshalAs(UnmanagedType.LPWStr)] string pwcsName);
 
+    // https://learn.microsoft.com/en-us/windows/win32/api/coml2api/nf-coml2api-stgopenstorage
     [DllImport("ole32.dll")]
     public static extern int StgOpenStorage(
         [MarshalAs(UnmanagedType.LPWStr)] string pwcsName,
@@ -166,6 +167,18 @@ public static class Ole32
         IntPtr snbExclude,
         uint reserved,
         out IStorage ppstgOpen);
+
+    // https://learn.microsoft.com/en-us/windows/win32/api/coml2api/nf-coml2api-stgcreatestorageex
+    [DllImport("ole32.dll")]
+    public static extern int StgCreateStorageEx(
+        [MarshalAs(UnmanagedType.LPWStr)] string pwcsName,
+        STGM grfMode,
+        uint stgfmt,
+        uint grfAttrs,
+        IntPtr pStgOptions,
+        IntPtr pSecurityDescriptor,
+        ref Guid riid,
+        out IStorage ppObjectOpen);     
 }
 
 public class DisposableIStream : IDisposable
@@ -198,6 +211,13 @@ public class DisposableIStream : IDisposable
         return statstg;
     }
 
+    public void Write(byte[] buffer, int length)
+    {
+        IntPtr pcbWritten = Marshal.AllocHGlobal(sizeof(int));
+        Stream.Write(buffer, length, pcbWritten);
+        Marshal.FreeHGlobal(pcbWritten);
+    }
+
     public void Dispose()
     {
         if (Stream != null)
@@ -210,6 +230,20 @@ public class DisposableIStream : IDisposable
 
 public class DisposableIStorage : IDisposable
 {
+
+    public static DisposableIStorage CreateStorage(string pwcsName, STGM grfMode)
+    {
+        // guid ref
+        Guid guid = new Guid("0000000b-0000-0000-C000-000000000046");
+        HRESULT hr = Ole32.StgCreateStorageEx(pwcsName, grfMode, 0, 0, IntPtr.Zero, IntPtr.Zero, ref guid, out IStorage storage);
+        if (hr != Com.S_OK)
+        {
+            Exception? ex = Marshal.GetExceptionForHR(hr);
+            throw new Exception("Error while creating file: " + (ex?.Message));
+        }
+        return new DisposableIStorage(storage);
+    }
+
     public IStorage Storage { get; private set; }
 
     private DisposableIStorage(IStorage storage){
@@ -237,6 +271,12 @@ public class DisposableIStorage : IDisposable
     public DisposableIStream OpenStream(string pwcsName, IntPtr reserved1, STGM grfMode)
     {
         Storage.OpenStream(pwcsName, reserved1, grfMode, 0, out IStream stream);
+        return new DisposableIStream(stream);
+    }
+
+    public DisposableIStream CreateStream(string pwcsName, STGM grfMode)
+    {
+        Storage.CreateStream(pwcsName, grfMode, 0, 0, out IStream stream);
         return new DisposableIStream(stream);
     }
 

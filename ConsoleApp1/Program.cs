@@ -9,14 +9,45 @@
     {
         static void Main(string[] args)
         {
-            string filename_original = @"c:\Users\franc\RustroverProjects\aztec-quest\aztecquest-dev.vpx";
-            string filename_copy = @"c:\Users\franc\RustroverProjects\aztec-quest\aztecquest-copy.vpx";
+            Console.WriteLine("Current directory: " + Environment.CurrentDirectory);
+            string filename_minimal_ole32 = @"../../../../minimal.ole32.cfb";
+            string filename_minimal_rust = @"../../../../minimal.rust.cfb";
             Console.WriteLine("================= Diff ========================");
-            Diff(filename_original, filename_copy, new List<string> { });
+            Diff(filename_minimal_ole32, filename_minimal_rust, new List<string> { });
             // Console.WriteLine("================= Original ====================");
             // ListPaths(filename_original);
             // Console.WriteLine("================= Copy ========================");
             // ListPaths(filename_copy);
+
+            // open stream root\stream31
+            // using (var storage = new DisposableIStorage(filename_minimal_rust, null, STGM.DIRECT | STGM.READ | STGM.SHARE_EXCLUSIVE, IntPtr.Zero))
+            // {
+            //     try{
+            //     using (var stream = storage.OpenStream("stream31", IntPtr.Zero, STGM.READ | STGM.SHARE_EXCLUSIVE))
+            //     {
+            //         STATSTG statstg = stream.Stat((int)STATFLAG.STATFLAG_DEFAULT);
+            //         byte[] buffer = new byte[statstg.cbSize];
+            //         stream.Read(buffer, buffer.Length);
+            //         Console.WriteLine("Stream content: " + buffer);
+            //     }
+            //     }catch(Exception e){
+            //         Console.WriteLine("Error: " + e.Message);
+            //     }
+            // }
+
+            // // create a new cfg file with 32 empty streams
+            // using (var storage = DisposableIStorage.CreateStorage(filename_minimal_ole32, STGM.READWRITE | STGM.CREATE | STGM.SHARE_EXCLUSIVE | STGM.DIRECT))
+            // {
+            //     for (int i = 0; i < 32; i++)
+            //     {
+            //         using (var stream = storage.CreateStream($"stream{i}", STGM.READWRITE | STGM.CREATE | STGM.SHARE_EXCLUSIVE))
+            //         {
+            //             byte[] buffer = new byte[0];
+            //             stream.Write(buffer, buffer.Length);
+            //         }
+            //     }
+            // }
+            // ListPaths(filename_minimal_ole32);
         }
 
         /**
