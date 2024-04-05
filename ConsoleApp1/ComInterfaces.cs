@@ -152,6 +152,22 @@ public enum STGTY : int
     STGTY_PROPERTY = 4
 }
 
+public enum STGFMT : int
+{
+    STGFMT_STORAGE = 0,
+    STGFMT_FILE = 3,
+    STGFMT_ANY = 4,
+    STGFMT_DOCFILE = 5
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct STGOPTIONS
+{
+    public ushort usVersion;
+    public ushort reserved;
+    public uint ulSectorSize;
+}
+
 public static class Ole32
 {
     [DllImport("ole32.dll")]
@@ -173,12 +189,12 @@ public static class Ole32
     public static extern int StgCreateStorageEx(
         [MarshalAs(UnmanagedType.LPWStr)] string pwcsName,
         STGM grfMode,
-        uint stgfmt,
+        STGFMT stgfmt,
         uint grfAttrs,
-        IntPtr pStgOptions,
+        ref STGOPTIONS pStgOptions,
         IntPtr pSecurityDescriptor,
         ref Guid riid,
-        out IStorage ppObjectOpen);     
+        out IStorage ppObjectOpen);
 }
 
 public class DisposableIStream : IDisposable
@@ -233,9 +249,15 @@ public class DisposableIStorage : IDisposable
 
     public static DisposableIStorage CreateStorage(string pwcsName, STGM grfMode)
     {
-        // guid ref
-        Guid guid = new Guid("0000000b-0000-0000-C000-000000000046");
-        HRESULT hr = Ole32.StgCreateStorageEx(pwcsName, grfMode, 0, 0, IntPtr.Zero, IntPtr.Zero, ref guid, out IStorage storage);
+        // guid ref for V4
+        Guid IID_IPropertySetStorage = new Guid("0000013A-0000-0000-C000-000000000046");
+
+        STGOPTIONS stg;
+        stg.usVersion = 1;
+        stg.reserved = 0;
+        stg.ulSectorSize = 4096;
+
+        HRESULT hr = Ole32.StgCreateStorageEx(pwcsName, grfMode, STGFMT.STGFMT_DOCFILE, 0, ref stg, IntPtr.Zero, ref IID_IPropertySetStorage, out IStorage storage);
         if (hr != Com.S_OK)
         {
             Exception? ex = Marshal.GetExceptionForHR(hr);
@@ -246,7 +268,8 @@ public class DisposableIStorage : IDisposable
 
     public IStorage Storage { get; private set; }
 
-    private DisposableIStorage(IStorage storage){
+    private DisposableIStorage(IStorage storage)
+    {
         Storage = storage;
     }
 
