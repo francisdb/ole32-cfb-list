@@ -3,122 +3,194 @@
     using System;
     using System.Runtime.InteropServices;
     using System.Runtime.InteropServices.ComTypes;
+    using System.Text.RegularExpressions;
 
     class Program
     {
-        [DllImport("ole32.dll")]
-        private static extern int StgIsStorageFile(
-            [MarshalAs(UnmanagedType.LPWStr)] string pwcsName);
-
-        [DllImport("ole32.dll")]
-        static extern int StgOpenStorage(
-            [MarshalAs(UnmanagedType.LPWStr)] string pwcsName,
-            IStorage pstgPriority,
-            STGM grfMode,
-            IntPtr snbExclude,
-            uint reserved,
-            out IStorage ppstgOpen);
-
         static void Main(string[] args)
         {
             string filename_original = @"c:\Users\franc\RustroverProjects\aztec-quest\aztecquest-dev.vpx";
             string filename_copy = @"c:\Users\franc\RustroverProjects\aztec-quest\aztecquest-copy.vpx";
-            Console.WriteLine("================= Original ====================");
-            ListVPXContents(filename_original);
-            Console.WriteLine("================= Copy ========================");
-            ListVPXContents(filename_copy);
-            Console.WriteLine("================= Original name ===============");
-            ReadTableInfoTableName(filename_original);
-            Console.WriteLine("================= Copy name ===================");
-            ReadTableInfoTableName(filename_copy);
+            Console.WriteLine("================= Diff ========================");
+            Diff(filename_original, filename_copy, new List<string> { });
+            // Console.WriteLine("================= Original ====================");
+            // ListPaths(filename_original);
+            // Console.WriteLine("================= Copy ========================");
+            // ListPaths(filename_copy);
         }
 
-        // read root\TableInfo\TableName
-        private static void ReadTableInfoTableName(string filename)
+        /**
+            Diff two storage files
+            Uses the first one as the reference and compares it with the second one
+        */
+        private static void Diff(string filename1, string filename2, List<string> ignoreInPaths)
         {
-            IStorage storage = null;
-            if (StgOpenStorage(
-                filename,
-                null,
-                STGM.DIRECT | STGM.READ | STGM.SHARE_EXCLUSIVE,
-                IntPtr.Zero,
-                0,
-                out storage) != 0)
+            using (var storage1 = new DisposableIStorage(filename1, null, STGM.DIRECT | STGM.READ | STGM.SHARE_EXCLUSIVE, IntPtr.Zero))
             {
-                Console.WriteLine("Failed to open storage at " + filename);
-                return;
+                using (var storage2 = new DisposableIStorage(filename2, null, STGM.DIRECT | STGM.READ | STGM.SHARE_EXCLUSIVE, IntPtr.Zero))
+                {
+                    DoDiff(storage1, storage2, "root", ignoreInPaths);
+
+                    List<string> nodes1 = EnumerateNodes(storage1, "root");
+                    List<string> nodes2 = EnumerateNodes(storage2, "root");
+                    foreach (string node in nodes2)
+                    {
+                        if (!nodes1.Contains(node))
+                        {
+                            Console.WriteLine($"⚠️ {node} Extra entry in second file");
+                        }
+                    }
+                }
             }
-
-            IStorage tableInfoStorage;
-            storage.OpenStorage("TableInfo", null, (uint)(STGM.READ | STGM.SHARE_EXCLUSIVE), IntPtr.Zero, 0, out tableInfoStorage);
-
-            IStream tableNameStream;
-            tableInfoStorage.OpenStream("TableName", IntPtr.Zero, (uint)(STGM.READ | STGM.SHARE_EXCLUSIVE), 0, out tableNameStream);
-
-            System.Runtime.InteropServices.ComTypes.STATSTG statstg;
-            tableNameStream.Stat(out statstg, (int)STATFLAG.STATFLAG_DEFAULT);
-            IntPtr pcbRead = IntPtr.Zero;
-            byte[] buffer = new byte[statstg.cbSize];
-            tableNameStream.Read(buffer, buffer.Length, pcbRead);
-            Marshal.ReleaseComObject(tableNameStream);
-            Marshal.ReleaseComObject(tableInfoStorage);
-            Marshal.ReleaseComObject(storage);
-
-            // the string is encoded with 2 bytes per character
-            Console.WriteLine(System.Text.Encoding.Unicode.GetString(buffer));
         }
 
-        private static void ListVPXContents(string filename)
+        private static int DoDiff(DisposableIStorage storage1, DisposableIStorage storage2, string currentPath, List<string> ignoreInPaths, int count = 0)
         {
-            if (StgIsStorageFile(filename) == 0)
+            Console.WriteLine($"📁 {count} {currentPath}");
+            IEnumerator<STATSTG> enumerator1 = storage1.EnumElements();
+            while (enumerator1.MoveNext())
             {
-                Console.WriteLine("Opening storage at " + filename);
-                IStorage storage = null;
-                if (StgOpenStorage(
-                    filename,
-                    null,
-                    STGM.DIRECT | STGM.READ | STGM.SHARE_EXCLUSIVE,
-                    IntPtr.Zero,
-                    0,
-                    out storage) == 0)
+                STATSTG statsg1 = enumerator1.Current;
+                string strNode1 = statsg1.pwcsName;
+
+                string fullPath = Path.Combine(currentPath, strNode1);
+                if (ignoreInPaths.Any(path => fullPath.Contains(path)))
                 {
-                    EnumerateNodes(storage, "root");
-                    Marshal.ReleaseComObject(storage);
+                    continue;
                 }
-                else
+
+                count++;
+
+                if (statsg1.type == (int)STGTY.STGTY_STREAM)
                 {
-                    Console.WriteLine("Failed to open storage at " + filename);
+                    try
+                    {
+                        using (var stream1 = storage1.OpenStream(strNode1, IntPtr.Zero, STGM.READ | STGM.SHARE_EXCLUSIVE))
+                        {
+                            using (var stream2 = storage2.OpenStream(strNode1, IntPtr.Zero, STGM.READ | STGM.SHARE_EXCLUSIVE))
+                            {
+                                StreamDiffResult result = DiffStream(fullPath, stream1, stream2);
+                                switch (result)
+                                {
+                                    case StreamDiffResult.Same:
+                                        Console.WriteLine($"✅ {count} {fullPath} Same");
+                                        break;
+                                    case StreamDiffResult.DifferentSize:
+                                        Console.WriteLine($"☑️ {count} {fullPath} Different size");
+                                        break;
+                                    case StreamDiffResult.DifferentContent:
+                                        Console.WriteLine($"❌ {count} {fullPath} Different content");
+                                        break;
+                                }
+                            }
+                        }
+                    }
+                    catch (COMException e)
+                    {
+                        if (e.ErrorCode == unchecked((int)0x80030002)) // STG_E_FILENOTFOUND
+                        {
+                            Console.WriteLine($"➖ {count} {fullPath} Not found");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"❌ {count} {fullPath} Error: {e.Message}");
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        Console.WriteLine($"❌ {count} {fullPath} Error: {e.Message}");
+                    }
                 }
+
+                if (statsg1.type == (int)STGTY.STGTY_STORAGE)
+                {
+                    using (var subStorage1 = storage1.OpenStorage(strNode1, null, STGM.READ | STGM.SHARE_EXCLUSIVE, IntPtr.Zero))
+                    {
+                        using (var subStorage2 = storage2.OpenStorage(strNode1, null, STGM.READ | STGM.SHARE_EXCLUSIVE, IntPtr.Zero))
+                        {
+                            count = DoDiff(subStorage1, subStorage2, fullPath, ignoreInPaths, count);
+                        }
+                    }
+                }
+            }
+            return count;
+        }
+
+        // create an enum for the stream diff result
+        private enum StreamDiffResult
+        {
+            Same,
+            DifferentSize,
+            DifferentContent
+        }
+
+        private static StreamDiffResult DiffStream(string fullPath, DisposableIStream stream1, DisposableIStream stream2)
+        {
+            STATSTG statstg1 = stream1.Stat((int)STATFLAG.STATFLAG_DEFAULT);
+            STATSTG statstg2 = stream2.Stat((int)STATFLAG.STATFLAG_DEFAULT);
+            if (statstg1.cbSize != statstg2.cbSize)
+            {
+                return StreamDiffResult.DifferentSize;
             }
             else
             {
-                Console.WriteLine("Not a storage file: " + filename);
+                byte[] buffer1 = new byte[statstg1.cbSize];
+                byte[] buffer2 = new byte[statstg2.cbSize];
+                stream1.Read(buffer1, buffer1.Length);
+                stream2.Read(buffer2, buffer2.Length);
+                bool equal = true;
+                for (int i = 0; i < buffer1.Length; i++)
+                {
+                    if (buffer1[i] != buffer2[i])
+                    {
+                        equal = false;
+                        break;
+                    }
+                }
+                if (!equal)
+                {
+                    return StreamDiffResult.DifferentContent;
+                }
+                else
+                {
+                    return StreamDiffResult.Same;
+                }
             }
         }
 
-        static void EnumerateNodes(IStorage storage, string currentPath)
+        private static void ListPaths(string filename)
         {
-            IEnumSTATSTG pIEnumStatStg = null;
-            storage.EnumElements(0, IntPtr.Zero, 0, out pIEnumStatStg);
-
-            System.Runtime.InteropServices.ComTypes.STATSTG[] regelt = new System.Runtime.InteropServices.ComTypes.STATSTG[1];
-            uint fetched = 0;
-
-            while (pIEnumStatStg.Next(1, regelt, out fetched) == 0 && fetched > 0)
+            Console.WriteLine("Opening storage at " + filename);
+            using (var storage = new DisposableIStorage(filename, null, STGM.DIRECT | STGM.READ | STGM.SHARE_EXCLUSIVE, IntPtr.Zero))
             {
-                string strNode = regelt[0].pwcsName;
-                string fullPath = Path.Combine(currentPath, strNode);
-                Console.WriteLine(fullPath);
-
-                if (regelt[0].type == (int)STGTY.STGTY_STORAGE)
+                List<string> nodes = EnumerateNodes(storage, "root");
+                foreach (string node in nodes)
                 {
-                    IStorage subStorage;
-                    storage.OpenStorage(strNode, null, (uint)(STGM.READ | STGM.SHARE_EXCLUSIVE), IntPtr.Zero, 0, out subStorage);
-                    EnumerateNodes(subStorage, fullPath);
-                    Marshal.ReleaseComObject(subStorage);
+                    Console.WriteLine(node);
                 }
             }
-            Marshal.ReleaseComObject(pIEnumStatStg);
+        }
+
+        static List<string> EnumerateNodes(DisposableIStorage storage, string currentPath)
+        {
+            List<string> nodes = new List<string>();
+            IEnumerator<STATSTG> enumerator = storage.EnumElements();
+            while (enumerator.MoveNext())
+            {
+                STATSTG statsg = enumerator.Current;
+                string strNode = statsg.pwcsName;
+                string fullPath = Path.Combine(currentPath, strNode);
+                nodes.Add(fullPath);
+
+                if (statsg.type == (int)STGTY.STGTY_STORAGE)
+                {
+                    using (var subStorage = storage.OpenStorage(strNode, null, STGM.READ | STGM.SHARE_EXCLUSIVE, IntPtr.Zero))
+                    {
+                        nodes.AddRange(EnumerateNodes(subStorage, fullPath));
+                    }
+                }
+            }
+            return nodes;
         }
     }
 }
